@@ -1,0 +1,132 @@
+{
+  "entities": {
+    "user": {
+      "title": "User",
+      "description": "Student or Admin user profile",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID"
+        },
+        "email": {
+          "type": "string",
+          "description": "User email address"
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name of student or admin"
+        },
+        "role": {
+          "type": "string",
+          "description": "Role in the academy",
+          "enum": ["admin", "student"]
+        },
+        "status": {
+          "type": "string",
+          "description": "Account status",
+          "enum": ["active", "blocked", "revoked"]
+        },
+        "initialPassword": {
+          "type": "string",
+          "description": "Initial password generated for student access"
+        },
+        "notes": {
+          "type": "string",
+          "description": "Admin notes on student"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Last update timestamp"
+        }
+      },
+      "required": ["uid", "email", "name", "role", "status"]
+    },
+    "admin": {
+      "title": "Admin",
+      "description": "Admin authorization mapping document",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Admin UID"
+        },
+        "email": {
+          "type": "string",
+          "description": "Admin email address"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation timestamp"
+        }
+      },
+      "required": ["uid", "email"]
+    },
+    "lesson": {
+      "title": "Lesson",
+      "description": "Digital Marketing course video lesson",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Lesson document ID"
+        },
+        "title": {
+          "type": "string",
+          "description": "Lesson title"
+        },
+        "description": {
+          "type": "string",
+          "description": "Lesson summary or notes"
+        },
+        "driveUrl": {
+          "type": "string",
+          "description": "Original Google Drive link"
+        },
+        "driveFileId": {
+          "type": "string",
+          "description": "Extracted Google Drive file ID"
+        },
+        "order": {
+          "type": "number",
+          "description": "Display sequence number"
+        },
+        "isPublished": {
+          "type": "boolean",
+          "description": "Whether visible to students"
+        },
+        "duration": {
+          "type": "string",
+          "description": "Video duration label"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Last update timestamp"
+        }
+      },
+      "required": ["title", "driveUrl", "driveFileId", "order", "isPublished"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "user",
+      "description": "Collection of all student and admin profiles"
+    },
+    "/admins/{adminId}": {
+      "schema": "admin",
+      "description": "Fast lookup collection of verified administrator UIDs"
+    },
+    "/lessons/{lessonId}": {
+      "schema": "lesson",
+      "description": "Collection of Digital Marketing course lessons"
+    }
+  }
+}

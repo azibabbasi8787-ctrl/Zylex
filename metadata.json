@@ -1,0 +1,6 @@
+{
+  "name": "Zylex Academy",
+  "description": "Private Digital Marketing Course portal for students and administrator access.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
