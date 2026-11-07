@@ -458,6 +458,10 @@ export const AdminPanel: React.FC = () => {
         setStudentFormError('An account with this email address already exists.');
       } else if (msg.includes('weak-password')) {
         setStudentFormError('Password is too weak. Please use at least 6 characters.');
+      } else if (msg.includes('operation-not-allowed')) {
+        setStudentFormError(
+          'Email/Password sign-in is not enabled in Firebase. In the Firebase Console, go to Authentication -> Sign-in method -> Email/Password and click Enable.'
+        );
       } else {
         setStudentFormError(`Failed to create student: ${msg}`);
       }

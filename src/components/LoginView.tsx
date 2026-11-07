@@ -35,6 +35,10 @@ export const LoginView: React.FC = () => {
         setErrorMessage('Invalid credentials. Please verify your email and password.');
       } else if (msg.includes('too-many-requests')) {
         setErrorMessage('Too many failed login attempts. Please wait a moment and try again.');
+      } else if (msg.includes('operation-not-allowed')) {
+        setErrorMessage(
+          'Email/Password login is not enabled in Firebase Authentication. Please enable Email/Password in Firebase Console -> Authentication -> Sign-in method.'
+        );
       } else {
         setErrorMessage(msg || 'Authentication failed. Please check your credentials or network.');
       }
@@ -51,12 +55,29 @@ export const LoginView: React.FC = () => {
       await loginWithGoogle();
     } catch (err: unknown) {
       console.error('Google sign-in error:', err);
+      const errObj = err as { code?: string; message?: string };
+      const code = errObj?.code || '';
       const msg = err instanceof Error ? err.message : String(err);
-      setErrorMessage(
-        msg.includes('Access denied')
-          ? msg
-          : 'Google sign-in failed. Please try again or use your password.'
-      );
+
+      if (code === 'auth/unauthorized-domain') {
+        setErrorMessage(
+          'Firebase Error (unauthorized-domain): This Netlify domain is not in your Firebase Authorized Domains list. Please add your Netlify domain in the Firebase Console -> Authentication -> Settings -> Authorized Domains.'
+        );
+      } else if (code === 'auth/popup-blocked') {
+        setErrorMessage(
+          'Login popup was blocked by your browser. Please allow popups for this site or try again.'
+        );
+      } else if (code === 'auth/popup-closed-by-user') {
+        setErrorMessage('Sign-in cancelled. Please click the button to try again.');
+      } else if (msg.includes('Access denied')) {
+        setErrorMessage(msg);
+      } else if (code === 'auth/network-request-failed') {
+        setErrorMessage('Network connection error. Please check your internet connection.');
+      } else {
+        setErrorMessage(
+          msg || 'Google sign-in failed. Please ensure your domain is authorized in Firebase.'
+        );
+      }
     } finally {
       setLoading(false);
     }

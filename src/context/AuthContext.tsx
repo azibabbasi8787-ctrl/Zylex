@@ -4,6 +4,8 @@ import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
   signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   GoogleAuthProvider,
   signOut,
   setPersistence,
@@ -210,19 +212,49 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  // Handle redirect result (for mobile or browsers where popup is blocked)
+  useEffect(() => {
+    getRedirectResult(auth)
+      .then((result) => {
+        if (result && result.user) {
+          const email = result.user.email?.toLowerCase();
+          if (email !== ADMIN_EMAIL.toLowerCase()) {
+            signOut(auth).catch(() => {});
+            setAuthError(
+              'Access denied: Google Sign-In is exclusively reserved for the instructor. Students must log in using the email and password provided by the instructor.'
+            );
+          }
+        }
+      })
+      .catch((err: unknown) => {
+        console.error('Redirect auth error:', err);
+      });
+  }, []);
+
   const loginWithGoogle = async () => {
     setAuthError(null);
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
-    const result = await signInWithPopup(auth, provider);
-    const email = result.user.email?.toLowerCase();
+    try {
+      const result = await signInWithPopup(auth, provider);
+      const email = result.user.email?.toLowerCase();
 
-    // Strictly enforce admin email
-    if (email !== ADMIN_EMAIL.toLowerCase()) {
-      await signOut(auth);
-      const msg = 'Access denied: Google Sign-In is exclusively reserved for the instructor. Students must log in using the email and password provided by the instructor.';
-      setAuthError(msg);
-      throw new Error(msg);
+      // Strictly enforce admin email
+      if (email !== ADMIN_EMAIL.toLowerCase()) {
+        await signOut(auth);
+        const msg = 'Access denied: Google Sign-In is exclusively reserved for the instructor. Students must log in using the email and password provided by the instructor.';
+        setAuthError(msg);
+        throw new Error(msg);
+      }
+    } catch (popupErr: unknown) {
+      const code = (popupErr as { code?: string })?.code;
+      // If popup was blocked by browser or on mobile, fallback to signInWithRedirect
+      if (code === 'auth/popup-blocked' || code === 'auth/cancelled-popup-request') {
+        console.warn('Popup blocked, attempting redirect sign-in...');
+        await signInWithRedirect(auth, provider);
+        return;
+      }
+      throw popupErr;
     }
   };
 
