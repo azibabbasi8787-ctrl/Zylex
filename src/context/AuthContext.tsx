@@ -30,6 +30,8 @@ interface AuthContextType {
   isBlocked: boolean;
   isRevoked: boolean;
   loading: boolean;
+  authError: string | null;
+  clearAuthError: () => void;
   loginWithEmail: (email: string, pass: string, rememberMe?: boolean) => Promise<void>;
   loginWithGoogle: () => Promise<void>;
   logout: () => Promise<void>;
@@ -42,6 +44,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  const clearAuthError = () => setAuthError(null);
 
   // Test connection on mount
   useEffect(() => {
@@ -53,14 +58,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     let unsubscribeProfile: (() => void) | null = null;
 
     const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
-      setCurrentUser(user);
-
       if (unsubscribeProfile) {
         unsubscribeProfile();
         unsubscribeProfile = null;
       }
 
       if (!user) {
+        setCurrentUser(null);
         setUserProfile(null);
         setLoading(false);
         return;
@@ -68,79 +72,109 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       const isBootstrappedAdmin = user.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
-      try {
+      // Rule: Google Sign-In is strictly and solely for authorized academy instructors.
+      // Any non-admin Google account must be instantly signed out and rejected.
+      const isGoogleUser = user.providerData.some((p) => p.providerId === 'google.com');
+      if (isGoogleUser && !isBootstrappedAdmin) {
+        console.warn('Unauthorized Google login attempted:', user.email);
+        await signOut(auth);
+        setCurrentUser(null);
+        setUserProfile(null);
+        setAuthError(
+          'Access denied: Google Sign-In is exclusively reserved for the instructor. Students must log in using the email and password provided by the instructor.'
+        );
+        setLoading(false);
+        return;
+      }
+
+      // If this is the instructor / administrator
+      if (isBootstrappedAdmin) {
+        setCurrentUser(user);
         const userDocRef = doc(db, 'users', user.uid);
         const adminDocRef = doc(db, 'admins', user.uid);
 
-        // Realtime listener for immediate revocation or unblocking
+        const adminProfile: UserProfile = {
+          uid: user.uid,
+          email: user.email || ADMIN_EMAIL,
+          name: user.displayName || 'Administrator',
+          role: 'admin',
+          status: 'active',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+
+        // Sync admin documents in background
+        setDoc(adminDocRef, {
+          uid: user.uid,
+          email: user.email || ADMIN_EMAIL,
+          createdAt: new Date().toISOString(),
+        }, { merge: true }).catch(() => {});
+        setDoc(userDocRef, adminProfile, { merge: true }).catch(() => {});
+
+        setUserProfile(adminProfile);
+        setLoading(false);
+        return;
+      }
+
+      // If this is an email/password user, they MUST be registered by the admin in /users/{user.uid}
+      try {
+        const userDocRef = doc(db, 'users', user.uid);
+        const snapshot = await getDoc(userDocRef);
+
+        if (!snapshot.exists()) {
+          console.warn('Unregistered user attempted login:', user.uid, user.email);
+          await signOut(auth);
+          setCurrentUser(null);
+          setUserProfile(null);
+          setAuthError(
+            'Access denied: This account has not been registered by the administrator. Only enrolled students with admin-issued credentials can access the Zylex Academy portal.'
+          );
+          setLoading(false);
+          return;
+        }
+
+        const data = snapshot.data() as UserProfile;
+
+        // Ensure role is valid student
+        if (data.role !== 'student') {
+          await signOut(auth);
+          setCurrentUser(null);
+          setUserProfile(null);
+          setAuthError('Access denied: Unauthorized role.');
+          setLoading(false);
+          return;
+        }
+
+        // Valid registered student
+        setCurrentUser(user);
+        setUserProfile(data);
+        setLoading(false);
+
+        // Realtime listener for immediate revocation or unblocking while logged in
         unsubscribeProfile = onSnapshot(
           userDocRef,
-          async (snapshot) => {
-            if (snapshot.exists()) {
-              const data = snapshot.data() as UserProfile;
-              // If this user is the bootstrapped admin, always keep role as admin
-              if (isBootstrappedAdmin) {
-                if (data.role !== 'admin' || data.status !== 'active') {
-                  setDoc(userDocRef, { ...data, role: 'admin', status: 'active', updatedAt: new Date().toISOString() }, { merge: true }).catch(() => {});
-                }
-                setDoc(adminDocRef, {
-                  uid: user.uid,
-                  email: user.email || ADMIN_EMAIL,
-                  createdAt: new Date().toISOString(),
-                }, { merge: true }).catch(() => {});
-                setUserProfile({ ...data, role: 'admin', status: 'active' });
-              } else {
-                setUserProfile(data);
-              }
+          (liveSnapshot) => {
+            if (liveSnapshot.exists()) {
+              const liveData = liveSnapshot.data() as UserProfile;
+              setUserProfile(liveData);
             } else {
-              // Doc doesn't exist yet
-              if (isBootstrappedAdmin) {
-                // Auto create admin document
-                const adminProfile: UserProfile = {
-                  uid: user.uid,
-                  email: user.email || ADMIN_EMAIL,
-                  name: user.displayName || 'Administrator',
-                  role: 'admin',
-                  status: 'active',
-                  createdAt: new Date().toISOString(),
-                  updatedAt: new Date().toISOString(),
-                };
-                try {
-                  await setDoc(userDocRef, adminProfile);
-                  await setDoc(adminDocRef, {
-                    uid: user.uid,
-                    email: user.email || ADMIN_EMAIL,
-                    createdAt: new Date().toISOString(),
-                  });
-                  setUserProfile(adminProfile);
-                } catch (e) {
-                  console.error('Failed to auto-create admin doc:', e);
-                  // Provide fallback memory profile for bootstrapped admin
-                  setUserProfile(adminProfile);
-                }
-              } else {
-                // If student doc not found
-                setUserProfile(null);
-              }
+              // Student document was deleted by admin
+              signOut(auth).catch(() => {});
+              setCurrentUser(null);
+              setUserProfile(null);
+              setAuthError('Your student account has been removed by the administrator.');
             }
-            setLoading(false);
           },
           (error) => {
             console.error('Profile snapshot error:', error);
-            if (isBootstrappedAdmin) {
-              setUserProfile({
-                uid: user.uid,
-                email: user.email || ADMIN_EMAIL,
-                name: user.displayName || 'Administrator',
-                role: 'admin',
-                status: 'active',
-              });
-            }
-            setLoading(false);
           }
         );
       } catch (err) {
         console.error('Auth state initialization error:', err);
+        await signOut(auth);
+        setCurrentUser(null);
+        setUserProfile(null);
+        setAuthError('Error verifying student credentials with server.');
         setLoading(false);
       }
     });
@@ -154,17 +188,42 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const loginWithEmail = async (email: string, pass: string, rememberMe = true) => {
+    setAuthError(null);
     try {
       await setPersistence(auth, rememberMe ? browserLocalPersistence : browserSessionPersistence);
     } catch {
       // Persistence fallback if blocked
     }
-    await signInWithEmailAndPassword(auth, email.trim(), pass);
+    const credential = await signInWithEmailAndPassword(auth, email.trim(), pass);
+    const isBootstrappedAdmin = credential.user.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+
+    // Verify document exists immediately to return direct error if not registered
+    if (!isBootstrappedAdmin) {
+      const userDocRef = doc(db, 'users', credential.user.uid);
+      const snap = await getDoc(userDocRef);
+      if (!snap.exists()) {
+        await signOut(auth);
+        const msg = 'Access denied: This account is not registered by the administrator. Please contact your instructor.';
+        setAuthError(msg);
+        throw new Error(msg);
+      }
+    }
   };
 
   const loginWithGoogle = async () => {
+    setAuthError(null);
     const provider = new GoogleAuthProvider();
-    await signInWithPopup(auth, provider);
+    provider.setCustomParameters({ prompt: 'select_account' });
+    const result = await signInWithPopup(auth, provider);
+    const email = result.user.email?.toLowerCase();
+
+    // Strictly enforce admin email
+    if (email !== ADMIN_EMAIL.toLowerCase()) {
+      await signOut(auth);
+      const msg = 'Access denied: Google Sign-In is exclusively reserved for the instructor. Students must log in using the email and password provided by the instructor.';
+      setAuthError(msg);
+      throw new Error(msg);
+    }
   };
 
   const logout = async () => {
@@ -188,9 +247,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const isBootstrapped = currentUser?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
   const isAdmin = isBootstrapped || userProfile?.role === 'admin';
   const isStudent = !isAdmin && userProfile?.role === 'student';
-  const isBlocked = userProfile?.status === 'blocked';
-  const isRevoked = userProfile?.status === 'revoked';
-  const isActive = (userProfile?.status === 'active' || isAdmin) && !isBlocked && !isRevoked;
+  const isBlocked = isStudent && userProfile?.status === 'blocked';
+  const isRevoked = isStudent && userProfile?.status === 'revoked';
+  const isActive = isStudent && userProfile?.status === 'active';
 
   return (
     <AuthContext.Provider
@@ -203,6 +262,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isBlocked,
         isRevoked,
         loading,
+        authError,
+        clearAuthError,
         loginWithEmail,
         loginWithGoogle,
         logout,

@@ -138,6 +138,23 @@ export const AdminPanel: React.FC = () => {
     setTimeout(() => setToastMessage(null), 4000);
   };
 
+  // Mass selection states
+  const [selectedLessonIds, setSelectedLessonIds] = useState<string[]>([]);
+  const [selectedStudentUids, setSelectedStudentUids] = useState<string[]>([]);
+
+  // Custom In-App Confirmation Dialog state (avoids sandboxed window.confirm blocking)
+  interface ConfirmDialogState {
+    title: string;
+    message: string;
+    confirmText?: string;
+    isDestructive?: boolean;
+    itemCount?: number;
+    itemPreviews?: string[];
+    action: () => Promise<void>;
+  }
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
+  const [isExecutingConfirm, setIsExecutingConfirm] = useState(false);
+
   // Auto-detect title from Google Drive whenever link changes in Add Lesson modal
   useEffect(() => {
     if (!showAddLessonModal) {
@@ -289,7 +306,7 @@ export const AdminPanel: React.FC = () => {
   const handleExecuteMassImport = async () => {
     const selected = scannedVideos.filter((v) => v.selected);
     if (selected.length === 0) {
-      alert('Please select at least one video to import.');
+      triggerToast('Please select at least one video to import.');
       return;
     }
 
@@ -329,7 +346,7 @@ export const AdminPanel: React.FC = () => {
     } catch (err: unknown) {
       console.error('Mass import error:', err);
       const msg = err instanceof Error ? err.message : String(err);
-      alert(`Mass import failed: ${msg}`);
+      triggerToast(`Mass import failed: ${msg}`);
     } finally {
       setIsExecutingMassImport(false);
     }
@@ -462,7 +479,7 @@ export const AdminPanel: React.FC = () => {
       setShowEditStudentModal(null);
     } catch (err) {
       console.error('Update student error:', err);
-      alert('Failed to update student.');
+      triggerToast('Failed to update student.');
     }
   };
 
@@ -476,7 +493,7 @@ export const AdminPanel: React.FC = () => {
     } catch (err: unknown) {
       console.error('Password reset error:', err);
       const msg = err instanceof Error ? err.message : String(err);
-      alert(`Could not send reset email: ${msg}`);
+      triggerToast(`Could not send reset email: ${msg}`);
     }
   };
 
@@ -490,7 +507,7 @@ export const AdminPanel: React.FC = () => {
       triggerToast(`Student ${student.name} is now blocked.`);
     } catch (err) {
       console.error('Block student error:', err);
-      alert('Failed to block student.');
+      triggerToast('Failed to block student.');
     }
   };
 
@@ -504,37 +521,80 @@ export const AdminPanel: React.FC = () => {
       triggerToast(`Student ${student.name} reactivated.`);
     } catch (err) {
       console.error('Reactivate student error:', err);
-      alert('Failed to reactivate student.');
+      triggerToast('Failed to reactivate student.');
     }
   };
 
   // 6. Revoke Student Access
-  const handleRevokeStudent = async (student: UserProfile) => {
-    if (!window.confirm(`Revoke course access for ${student.name}?`)) return;
-    try {
-      await updateDoc(doc(db, 'users', student.uid), {
-        status: 'revoked',
-        updatedAt: new Date().toISOString(),
-      });
-      triggerToast(`Access revoked for ${student.name}.`);
-    } catch (err) {
-      console.error('Revoke student error:', err);
-      alert('Failed to revoke access.');
-    }
+  const handleRevokeStudent = (student: UserProfile) => {
+    setConfirmDialog({
+      title: 'Revoke Course Enrollment',
+      message: `Are you sure you want to revoke course access for "${student.name}"? The student will be blocked from accessing course videos.`,
+      confirmText: 'Revoke Access',
+      isDestructive: true,
+      action: async () => {
+        try {
+          await updateDoc(doc(db, 'users', student.uid), {
+            status: 'revoked',
+            updatedAt: new Date().toISOString(),
+          });
+          triggerToast(`Access revoked for ${student.name}.`);
+        } catch (err) {
+          console.error('Revoke student error:', err);
+          triggerToast('Failed to revoke access.');
+        }
+      },
+    });
   };
 
-  // 7. Delete Student Account
-  const handleDeleteStudent = async (student: UserProfile) => {
-    if (!window.confirm(`Permanently remove ${student.name} (${student.email}) from student directory?`)) {
+  // 7. Delete Student Account (Zero window.confirm, uses in-app modal)
+  const handleDeleteStudent = (student: UserProfile) => {
+    setConfirmDialog({
+      title: 'Delete Student Account',
+      message: `Permanently delete ${student.name} (${student.email}) from the academy? This will immediately revoke their access.`,
+      confirmText: 'Delete Student',
+      isDestructive: true,
+      action: async () => {
+        try {
+          await deleteDoc(doc(db, 'users', student.uid));
+          setSelectedStudentUids((prev) => prev.filter((id) => id !== student.uid));
+          triggerToast(`Student ${student.name} deleted.`);
+        } catch (err: unknown) {
+          console.error('Delete student error:', err);
+          const msg = err instanceof Error ? err.message : String(err);
+          triggerToast(`Failed to delete student: ${msg}`);
+        }
+      },
+    });
+  };
+
+  // Mass Delete Students
+  const handleMassDeleteStudents = () => {
+    const toDelete = students.filter((s) => selectedStudentUids.includes(s.uid));
+    if (toDelete.length === 0) {
+      triggerToast('Please select at least one student to delete.');
       return;
     }
-    try {
-      await deleteDoc(doc(db, 'users', student.uid));
-      triggerToast(`Student ${student.name} deleted.`);
-    } catch (err) {
-      console.error('Delete student error:', err);
-      alert('Failed to delete student.');
-    }
+
+    setConfirmDialog({
+      title: `Mass Delete ${toDelete.length} Students`,
+      message: `You are about to permanently remove ${toDelete.length} student account(s). Their course access will be revoked immediately.`,
+      confirmText: `Delete ${toDelete.length} Students`,
+      isDestructive: true,
+      itemCount: toDelete.length,
+      itemPreviews: toDelete.map((s) => `${s.name} (${s.email})`),
+      action: async () => {
+        try {
+          await Promise.all(toDelete.map((s) => deleteDoc(doc(db, 'users', s.uid))));
+          setSelectedStudentUids([]);
+          triggerToast(`Successfully deleted ${toDelete.length} student account(s).`);
+        } catch (err: unknown) {
+          console.error('Mass delete students error:', err);
+          const msg = err instanceof Error ? err.message : String(err);
+          triggerToast(`Mass delete failed: ${msg}`);
+        }
+      },
+    });
   };
 
   // --- COURSE VIDEO MANAGEMENT ---
@@ -596,7 +656,7 @@ export const AdminPanel: React.FC = () => {
     if (!showEditLessonModal) return;
     const driveFileId = extractDriveFileId(showEditLessonModal.driveUrl);
     if (!driveFileId) {
-      alert('Invalid Google Drive video link.');
+      triggerToast('Invalid Google Drive video link.');
       return;
     }
 
@@ -614,20 +674,58 @@ export const AdminPanel: React.FC = () => {
       setShowEditLessonModal(null);
     } catch (err) {
       console.error('Update lesson error:', err);
-      alert('Failed to update lesson.');
+      triggerToast('Failed to update lesson.');
     }
   };
 
-  // Delete Video
-  const handleDeleteLesson = async (lesson: CourseLesson) => {
-    if (!window.confirm(`Delete lesson "${lesson.title}"?`)) return;
-    try {
-      await deleteDoc(doc(db, 'lessons', lesson.id));
-      triggerToast('Lesson deleted.');
-    } catch (err) {
-      console.error('Delete lesson error:', err);
-      alert('Failed to delete lesson.');
+  // Delete Video (Zero window.confirm, uses in-app modal)
+  const handleDeleteLesson = (lesson: CourseLesson) => {
+    setConfirmDialog({
+      title: 'Delete Course Video',
+      message: `Are you sure you want to permanently delete "${lesson.title}"? Students will immediately lose access to this video.`,
+      confirmText: 'Delete Video',
+      isDestructive: true,
+      action: async () => {
+        try {
+          await deleteDoc(doc(db, 'lessons', lesson.id));
+          setSelectedLessonIds((prev) => prev.filter((id) => id !== lesson.id));
+          triggerToast(`Video "${lesson.title}" deleted.`);
+        } catch (err: unknown) {
+          console.error('Delete lesson error:', err);
+          const msg = err instanceof Error ? err.message : String(err);
+          triggerToast(`Failed to delete video: ${msg}`);
+        }
+      },
+    });
+  };
+
+  // Mass Delete Videos
+  const handleMassDeleteLessons = () => {
+    const toDelete = lessons.filter((l) => selectedLessonIds.includes(l.id));
+    if (toDelete.length === 0) {
+      triggerToast('Please select at least one video to delete.');
+      return;
     }
+
+    setConfirmDialog({
+      title: `Mass Delete ${toDelete.length} Videos`,
+      message: `You are about to permanently delete ${toDelete.length} course video(s). This action cannot be undone.`,
+      confirmText: `Delete ${toDelete.length} Videos`,
+      isDestructive: true,
+      itemCount: toDelete.length,
+      itemPreviews: toDelete.map((l) => l.title),
+      action: async () => {
+        try {
+          await Promise.all(toDelete.map((l) => deleteDoc(doc(db, 'lessons', l.id))));
+          setSelectedLessonIds([]);
+          triggerToast(`Successfully deleted ${toDelete.length} video(s).`);
+        } catch (err: unknown) {
+          console.error('Mass delete error:', err);
+          const msg = err instanceof Error ? err.message : String(err);
+          triggerToast(`Mass delete failed: ${msg}`);
+        }
+      },
+    });
   };
 
   // Reorder Videos: Move Up / Down
@@ -650,7 +748,7 @@ export const AdminPanel: React.FC = () => {
       triggerToast('Video sequence updated.');
     } catch (err) {
       console.error('Reorder error:', err);
-      alert('Failed to reorder lessons.');
+      triggerToast('Failed to reorder lessons.');
     }
   };
 
@@ -668,55 +766,63 @@ export const AdminPanel: React.FC = () => {
   };
 
   // Seed sample lessons if empty
-  const handleSeedSampleLessons = async () => {
-    if (!window.confirm('Add sample Digital Marketing lessons with Google Drive templates?')) return;
-    const sampleLessons = [
-      {
-        title: '01. Foundations of Modern Digital Marketing & Growth Strategy',
-        driveUrl: 'https://drive.google.com/file/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs/preview',
-        duration: '22:45',
-        description: 'Core overview of customer acquisition funnels, digital marketing channels, and persona targeting.',
-        isPublished: true,
-      },
-      {
-        title: '02. Search Engine Optimization (SEO) & High-Intent Keyword Mapping',
-        driveUrl: 'https://drive.google.com/file/d/1_wKj2wA9f8Xg-y3zZf3mN1B9m4v1p5q7/preview',
-        duration: '31:10',
-        description: 'How to discover buyer-intent search queries, optimize on-page signals, and master technical SEO.',
-        isPublished: true,
-      },
-      {
-        title: '03. High-Converting Meta & Google Paid Ads Setup',
-        driveUrl: 'https://drive.google.com/file/d/1C0wKj3wA9f8Xg-y3zZf3mN1B9m4v1p8q/preview',
-        duration: '27:30',
-        description: 'Building profitable advertising campaigns on Meta Ads Manager and Google Search Ads from scratch.',
-        isPublished: true,
-      },
-    ];
+  const handleSeedSampleLessons = () => {
+    setConfirmDialog({
+      title: 'Seed Sample Course Lessons',
+      message: 'Add 3 sample Digital Marketing lessons with Google Drive templates to your course?',
+      confirmText: 'Add 3 Samples',
+      isDestructive: false,
+      action: async () => {
+        const sampleLessons = [
+          {
+            title: '01. Foundations of Modern Digital Marketing & Growth Strategy',
+            driveUrl: 'https://drive.google.com/file/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs/preview',
+            duration: '22:45',
+            description: 'Core overview of customer acquisition funnels, digital marketing channels, and persona targeting.',
+            isPublished: true,
+          },
+          {
+            title: '02. Search Engine Optimization (SEO) & High-Intent Keyword Mapping',
+            driveUrl: 'https://drive.google.com/file/d/1_wKj2wA9f8Xg-y3zZf3mN1B9m4v1p5q7/preview',
+            duration: '31:10',
+            description: 'How to discover buyer-intent search queries, optimize on-page signals, and master technical SEO.',
+            isPublished: true,
+          },
+          {
+            title: '03. High-Converting Meta & Google Paid Ads Setup',
+            driveUrl: 'https://drive.google.com/file/d/1C0wKj3wA9f8Xg-y3zZf3mN1B9m4v1p8q/preview',
+            duration: '27:30',
+            description: 'Building profitable advertising campaigns on Meta Ads Manager and Google Search Ads from scratch.',
+            isPublished: true,
+          },
+        ];
 
-    try {
-      for (let i = 0; i < sampleLessons.length; i++) {
-        const item = sampleLessons[i];
-        const fileId = extractDriveFileId(item.driveUrl) || '1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs';
-        const docRef = doc(collection(db, 'lessons'));
-        await setDoc(docRef, {
-          id: docRef.id,
-          title: item.title,
-          driveUrl: item.driveUrl,
-          driveFileId: fileId,
-          order: i + 1,
-          duration: item.duration,
-          description: item.description,
-          isPublished: item.isPublished,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        });
-      }
-      triggerToast('Sample lessons seeded successfully!');
-    } catch (err) {
-      console.error('Seed error:', err);
-      alert('Could not seed lessons.');
-    }
+        try {
+          for (let i = 0; i < sampleLessons.length; i++) {
+            const item = sampleLessons[i];
+            const fileId = extractDriveFileId(item.driveUrl) || '1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs';
+            const docRef = doc(collection(db, 'lessons'));
+            await setDoc(docRef, {
+              id: docRef.id,
+              title: item.title,
+              driveUrl: item.driveUrl,
+              driveFileId: fileId,
+              order: lessons.length + i + 1,
+              duration: item.duration,
+              description: item.description,
+              isPublished: item.isPublished,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            });
+          }
+          triggerToast('Sample lessons seeded successfully!');
+        } catch (err: unknown) {
+          console.error('Seed error:', err);
+          const msg = err instanceof Error ? err.message : String(err);
+          triggerToast(`Could not seed lessons: ${msg}`);
+        }
+      },
+    });
   };
 
   // Copy helper
@@ -840,18 +946,30 @@ export const AdminPanel: React.FC = () => {
                 </p>
               </div>
 
-              <button
-                onClick={() => {
-                  setNewStudentPassword(generateRandomPassword());
-                  setShowAddStudentModal(true);
-                  setStudentFormError(null);
-                  setCreatedStudentNotice(null);
-                }}
-                className="inline-flex items-center space-x-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-lg shadow-blue-900/30 transition-all self-start sm:self-auto"
-              >
-                <UserPlus className="w-4 h-4" />
-                <span>Add New Student</span>
-              </button>
+              <div className="flex flex-wrap items-center gap-2.5 self-start sm:self-auto">
+                {selectedStudentUids.length > 0 && (
+                  <button
+                    onClick={handleMassDeleteStudents}
+                    className="inline-flex items-center space-x-1.5 px-3.5 py-2.5 rounded-xl bg-rose-600/20 border border-rose-500/40 text-rose-300 hover:bg-rose-600 hover:text-white text-xs font-semibold shadow-md transition-all animate-in fade-in"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span>Mass Delete ({selectedStudentUids.length})</span>
+                  </button>
+                )}
+
+                <button
+                  onClick={() => {
+                    setNewStudentPassword(generateRandomPassword());
+                    setShowAddStudentModal(true);
+                    setStudentFormError(null);
+                    setCreatedStudentNotice(null);
+                  }}
+                  className="inline-flex items-center space-x-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-lg shadow-blue-900/30 transition-all self-start sm:self-auto"
+                >
+                  <UserPlus className="w-4 h-4" />
+                  <span>Add New Student</span>
+                </button>
+              </div>
             </div>
 
             {/* Filter & Search Bar */}
@@ -900,6 +1018,24 @@ export const AdminPanel: React.FC = () => {
                   <table className="w-full text-left text-xs">
                     <thead className="bg-[#0b1222] border-b border-slate-800 text-slate-400 uppercase font-semibold text-[10px] tracking-wider">
                       <tr>
+                        <th className="py-3.5 px-3 sm:px-4 w-10 text-center">
+                          <input
+                            type="checkbox"
+                            checked={
+                              filteredStudents.length > 0 &&
+                              selectedStudentUids.length === filteredStudents.length
+                            }
+                            onChange={() => {
+                              if (selectedStudentUids.length === filteredStudents.length) {
+                                setSelectedStudentUids([]);
+                              } else {
+                                setSelectedStudentUids(filteredStudents.map((s) => s.uid));
+                              }
+                            }}
+                            className="w-4 h-4 rounded border-slate-700 bg-slate-900 text-blue-600 focus:ring-blue-500/40 cursor-pointer"
+                            title="Select all students"
+                          />
+                        </th>
                         <th className="py-3.5 px-4 sm:px-6">Student Name</th>
                         <th className="py-3.5 px-4 sm:px-6">Email / Username</th>
                         <th className="py-3.5 px-4 sm:px-6">Account Status</th>
@@ -909,8 +1045,30 @@ export const AdminPanel: React.FC = () => {
                     </thead>
                     <tbody className="divide-y divide-slate-800/80">
                       {filteredStudents.map((student) => {
+                        const isSelected = selectedStudentUids.includes(student.uid);
                         return (
-                          <tr key={student.uid} className="hover:bg-slate-900/40 transition-colors">
+                          <tr
+                            key={student.uid}
+                            className={`transition-colors ${
+                              isSelected ? 'bg-blue-900/15' : 'hover:bg-slate-900/40'
+                            }`}
+                          >
+                            {/* Checkbox */}
+                            <td className="py-4 px-3 sm:px-4 text-center">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => {
+                                  setSelectedStudentUids((prev) =>
+                                    prev.includes(student.uid)
+                                      ? prev.filter((id) => id !== student.uid)
+                                      : [...prev, student.uid]
+                                  );
+                                }}
+                                className="w-4 h-4 rounded border-slate-700 bg-slate-900 text-blue-600 focus:ring-blue-500/40 cursor-pointer"
+                              />
+                            </td>
+
                             {/* Name */}
                             <td className="py-4 px-4 sm:px-6 font-semibold text-white">
                               {student.name}
@@ -1033,6 +1191,38 @@ export const AdminPanel: React.FC = () => {
               </div>
 
               <div className="flex flex-wrap items-center gap-2.5 self-start sm:self-auto">
+                {lessons.length > 0 && (
+                  <button
+                    onClick={() => {
+                      if (selectedLessonIds.length === lessons.length) {
+                        setSelectedLessonIds([]);
+                      } else {
+                        setSelectedLessonIds(lessons.map((l) => l.id));
+                      }
+                    }}
+                    className="inline-flex items-center space-x-1.5 px-3 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800 text-xs font-semibold transition-all"
+                  >
+                    {selectedLessonIds.length === lessons.length ? (
+                      <CheckSquare className="w-3.5 h-3.5 text-blue-400" />
+                    ) : (
+                      <Square className="w-3.5 h-3.5 text-slate-400" />
+                    )}
+                    <span>
+                      {selectedLessonIds.length === lessons.length ? 'Deselect All' : 'Select All'}
+                    </span>
+                  </button>
+                )}
+
+                {selectedLessonIds.length > 0 && (
+                  <button
+                    onClick={handleMassDeleteLessons}
+                    className="inline-flex items-center space-x-1.5 px-3.5 py-2.5 rounded-xl bg-rose-600/20 border border-rose-500/40 text-rose-300 hover:bg-rose-600 hover:text-white text-xs font-semibold shadow-md transition-all animate-in fade-in"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span>Mass Delete ({selectedLessonIds.length})</span>
+                  </button>
+                )}
+
                 {lessons.length === 0 && (
                   <button
                     onClick={handleSeedSampleLessons}
@@ -1112,13 +1302,35 @@ export const AdminPanel: React.FC = () => {
             ) : (
               <div className="space-y-3">
                 {lessons.map((lesson, index) => {
+                  const isLessonSelected = selectedLessonIds.includes(lesson.id);
                   return (
                     <div
                       key={lesson.id}
-                      className="bg-[#0d162a] border border-slate-800 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:border-slate-700 transition-all"
+                      className={`bg-[#0d162a] border ${
+                        isLessonSelected
+                          ? 'border-blue-500/60 bg-blue-950/20 shadow-md shadow-blue-950/30'
+                          : 'border-slate-800 hover:border-slate-700'
+                      } rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all`}
                     >
-                      {/* Left: Sequence and info */}
-                      <div className="flex items-start sm:items-center space-x-4">
+                      {/* Left: Sequence, Checkbox and info */}
+                      <div className="flex items-start sm:items-center space-x-3.5">
+                        {/* Checkbox for mass select */}
+                        <div className="pt-1 sm:pt-0 shrink-0">
+                          <input
+                            type="checkbox"
+                            checked={isLessonSelected}
+                            onChange={() => {
+                              setSelectedLessonIds((prev) =>
+                                prev.includes(lesson.id)
+                                  ? prev.filter((id) => id !== lesson.id)
+                                  : [...prev, lesson.id]
+                              );
+                            }}
+                            className="w-4 h-4 rounded border-slate-700 bg-slate-900 text-blue-600 focus:ring-blue-500/40 cursor-pointer"
+                            title="Select video for mass delete"
+                          />
+                        </div>
+
                         {/* Order controls */}
                         <div className="flex flex-col items-center justify-center space-y-1 bg-slate-900 p-1 rounded-xl border border-slate-800 shrink-0">
                           <button
@@ -2182,6 +2394,95 @@ export const AdminPanel: React.FC = () => {
                   )}
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 8. IN-APP CONFIRMATION MODAL (Zero window.confirm, works reliably in iframe) */}
+      {confirmDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="bg-[#0d162a] border border-slate-800 rounded-3xl p-6 sm:p-7 max-w-md w-full shadow-2xl relative overflow-hidden">
+            <div
+              className={`inline-flex items-center justify-center w-12 h-12 rounded-2xl ${
+                confirmDialog.isDestructive
+                  ? 'bg-rose-500/10 border border-rose-500/30 text-rose-400'
+                  : 'bg-blue-500/10 border border-blue-500/30 text-blue-400'
+              } mb-4`}
+            >
+              {confirmDialog.isDestructive ? (
+                <Trash2 className="w-6 h-6" />
+              ) : (
+                <HelpCircle className="w-6 h-6" />
+              )}
+            </div>
+
+            <h3 className="text-lg font-bold text-white tracking-tight">
+              {confirmDialog.title}
+            </h3>
+
+            <p className="mt-2 text-xs text-slate-300 leading-relaxed">
+              {confirmDialog.message}
+            </p>
+
+            {/* Item previews if mass delete */}
+            {confirmDialog.itemPreviews && confirmDialog.itemPreviews.length > 0 && (
+              <div className="mt-3.5 max-h-36 overflow-y-auto p-3 rounded-xl bg-slate-900/90 border border-slate-800 text-[11px] text-slate-400 space-y-1.5">
+                {confirmDialog.itemPreviews.slice(0, 8).map((preview, idx) => (
+                  <div key={idx} className="truncate text-slate-300 flex items-center space-x-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-rose-400 shrink-0" />
+                    <span className="truncate">{preview}</span>
+                  </div>
+                ))}
+                {confirmDialog.itemPreviews.length > 8 && (
+                  <div className="text-[10px] text-slate-500 italic pt-1 pl-3.5">
+                    + {confirmDialog.itemPreviews.length - 8} more items
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="mt-6 flex items-center justify-end space-x-3">
+              <button
+                type="button"
+                disabled={isExecutingConfirm}
+                onClick={() => setConfirmDialog(null)}
+                className="px-4 py-2.5 rounded-xl text-xs font-semibold text-slate-300 bg-slate-900 border border-slate-700/80 hover:bg-slate-800 hover:text-white transition-all disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isExecutingConfirm}
+                onClick={async () => {
+                  setIsExecutingConfirm(true);
+                  try {
+                    await confirmDialog.action();
+                    setConfirmDialog(null);
+                  } catch (err) {
+                    console.error('Confirmation action error:', err);
+                  } finally {
+                    setIsExecutingConfirm(false);
+                  }
+                }}
+                className={`flex items-center space-x-2 px-5 py-2.5 rounded-xl text-xs font-semibold text-white transition-all shadow-lg disabled:opacity-50 ${
+                  confirmDialog.isDestructive
+                    ? 'bg-rose-600 hover:bg-rose-500 shadow-rose-900/30'
+                    : 'bg-blue-600 hover:bg-blue-500 shadow-blue-900/30'
+                }`}
+              >
+                {isExecutingConfirm ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Processing...</span>
+                  </>
+                ) : (
+                  <>
+                    {confirmDialog.isDestructive && <Trash2 className="w-3.5 h-3.5" />}
+                    <span>{confirmDialog.confirmText || 'Confirm'}</span>
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </div>

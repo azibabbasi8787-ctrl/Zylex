@@ -2,8 +2,13 @@ import React from 'react';
 import { useAuth } from '../context/AuthContext';
 import { ShieldAlert, LogOut, Mail, BookOpen } from 'lucide-react';
 
-export const AccountBlockedView: React.FC = () => {
-  const { userProfile, currentUser, logout, isBlocked } = useAuth();
+interface AccountBlockedViewProps {
+  status?: 'blocked' | 'revoked';
+}
+
+export const AccountBlockedView: React.FC<AccountBlockedViewProps> = ({ status }) => {
+  const { userProfile, currentUser, logout, isBlocked: authBlocked } = useAuth();
+  const isBlocked = status ? status === 'blocked' : authBlocked;
 
   return (
     <div className="min-h-screen bg-[#070b14] flex flex-col justify-center items-center py-12 px-4 sm:px-6 lg:px-8 relative">

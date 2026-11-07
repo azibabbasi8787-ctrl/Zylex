@@ -68,6 +68,13 @@ service cloud.firestore {
         (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 100));
     }
 
+    function isEnrolledStudent() {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'student' &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active';
+    }
+
     // Admins collection
     match /admins/{adminId} {
       allow get: if isValidId(adminId) && isSignedIn() && (isAdmin() || request.auth.uid == adminId);
@@ -81,7 +88,7 @@ service cloud.firestore {
       allow list: if isAdmin();
       allow create: if isValidId(userId) && isSignedIn() && (
         isAdmin() ||
-        request.auth.uid == userId
+        (request.auth.uid == userId && isBootstrappedAdmin())
       ) && isValidUser(incoming());
       allow update: if isValidId(userId) && isSignedIn() && (
         isAdmin() ||
@@ -95,8 +102,14 @@ service cloud.firestore {
 
     // Course Lessons collection
     match /lessons/{lessonId} {
-      allow get: if isValidId(lessonId) && isSignedIn() && (isAdmin() || resource.data.isPublished == true);
-      allow list: if isSignedIn() && (isAdmin() || resource.data.isPublished == true);
+      allow get: if isValidId(lessonId) && isSignedIn() && (
+        isAdmin() ||
+        (isEnrolledStudent() && resource.data.isPublished == true)
+      );
+      allow list: if isSignedIn() && (
+        isAdmin() ||
+        (isEnrolledStudent() && resource.data.isPublished == true)
+      );
       allow create: if isValidId(lessonId) && isAdmin() && isValidLesson(incoming());
       allow update: if isValidId(lessonId) && isAdmin() && isValidLesson(incoming());
       allow delete: if isValidId(lessonId) && isAdmin();

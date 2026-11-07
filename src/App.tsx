@@ -12,7 +12,7 @@ import { AccountBlockedView } from './components/AccountBlockedView';
 import { BookOpen } from 'lucide-react';
 
 const MainPortal: React.FC = () => {
-  const { currentUser, isAdmin, isBlocked, isRevoked, loading } = useAuth();
+  const { currentUser, userProfile, isAdmin, isStudent, isBlocked, isRevoked, loading } = useAuth();
 
   if (loading) {
     return (
@@ -28,14 +28,9 @@ const MainPortal: React.FC = () => {
     );
   }
 
-  // Not logged in -> Show Login View
-  if (!currentUser) {
+  // Not logged in or unverified account -> Show Login View
+  if (!currentUser || (!isAdmin && !userProfile)) {
     return <LoginView />;
-  }
-
-  // If user is blocked or revoked (and not the administrator)
-  if (!isAdmin && (isBlocked || isRevoked)) {
-    return <AccountBlockedView />;
   }
 
   // If administrator
@@ -43,8 +38,22 @@ const MainPortal: React.FC = () => {
     return <AdminPanel />;
   }
 
-  // Otherwise Student Panel
-  return <StudentPanel />;
+  // If user is blocked or revoked
+  if (isBlocked) {
+    return <AccountBlockedView status="blocked" />;
+  }
+
+  if (isRevoked) {
+    return <AccountBlockedView status="revoked" />;
+  }
+
+  // Verified active student only
+  if (isStudent && userProfile?.status === 'active') {
+    return <StudentPanel />;
+  }
+
+  // Safe fallback to LoginView
+  return <LoginView />;
 };
 
 export default function App() {
