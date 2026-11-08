@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth, ADMIN_EMAIL } from '../context/AuthContext';
 import { Navbar } from './Navbar';
 import { UserProfile, CourseLesson, AccountStatus } from '../types';
@@ -62,6 +62,10 @@ import {
   X,
   Search,
   Filter,
+  Maximize,
+  Minimize,
+  Expand,
+  Shrink,
 } from 'lucide-react';
 
 export const AdminPanel: React.FC = () => {
@@ -86,6 +90,40 @@ export const AdminPanel: React.FC = () => {
   const [showAddLessonModal, setShowAddLessonModal] = useState(false);
   const [showEditLessonModal, setShowEditLessonModal] = useState<CourseLesson | null>(null);
   const [previewVideoLesson, setPreviewVideoLesson] = useState<CourseLesson | null>(null);
+  const [isPreviewFullscreen, setIsPreviewFullscreen] = useState(false);
+  const [isPreviewTheaterMode, setIsPreviewTheaterMode] = useState(false);
+  const previewContainerRef = useRef<HTMLDivElement>(null);
+
+  const togglePreviewFullscreen = async () => {
+    if (!previewContainerRef.current) return;
+    try {
+      if (!document.fullscreenElement) {
+        if (previewContainerRef.current.requestFullscreen) {
+          await previewContainerRef.current.requestFullscreen();
+        } else if ((previewContainerRef.current as any).webkitRequestFullscreen) {
+          await (previewContainerRef.current as any).webkitRequestFullscreen();
+        }
+      } else {
+        if (document.exitFullscreen) {
+          await document.exitFullscreen();
+        }
+      }
+    } catch {
+      setIsPreviewTheaterMode((prev) => !prev);
+    }
+  };
+
+  useEffect(() => {
+    const handleFsChange = () => {
+      setIsPreviewFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFsChange);
+    document.addEventListener('webkitfullscreenchange', handleFsChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFsChange);
+      document.removeEventListener('webkitfullscreenchange', handleFsChange);
+    };
+  }, []);
 
   // Form states - Add Student
   const [newStudentName, setNewStudentName] = useState('');
@@ -2091,32 +2129,89 @@ export const AdminPanel: React.FC = () => {
 
       {/* --- MODAL 6: PREVIEW VIDEO PLAYER --- */}
       {previewVideoLesson && (
-        <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-3 sm:p-6">
-          <div className="bg-[#0a0f1d] border border-slate-800 rounded-3xl w-full max-w-4xl overflow-hidden shadow-2xl relative">
-            <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between bg-[#0e162b]">
+        <div
+          className={`fixed inset-0 z-50 bg-black/95 backdrop-blur-md flex items-center justify-center animate-fadeIn ${
+            isPreviewTheaterMode || isPreviewFullscreen ? 'p-0' : 'p-3 sm:p-6'
+          }`}
+        >
+          <div
+            ref={previewContainerRef}
+            className={`bg-[#0a0f1d] flex flex-col shadow-2xl overflow-hidden relative transition-all duration-200 ${
+              isPreviewTheaterMode || isPreviewFullscreen
+                ? 'w-screen h-screen max-w-none max-h-none rounded-none border-0'
+                : 'border border-slate-800 rounded-3xl w-full max-w-5xl max-h-[95vh]'
+            }`}
+          >
+            <div className="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-[#0e162b] shrink-0">
               <div className="flex items-center space-x-2 truncate pr-4">
-                <span className="px-2 py-0.5 rounded bg-blue-600/20 text-blue-400 text-xs font-bold">
+                <span className="px-2 py-0.5 rounded bg-blue-600/20 text-blue-400 text-xs font-bold shrink-0">
                   Admin Preview
                 </span>
                 <span className="text-xs sm:text-sm font-bold text-white truncate">
                   {previewVideoLesson.title}
                 </span>
               </div>
-              <button
-                onClick={() => setPreviewVideoLesson(null)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center space-x-2 shrink-0">
+                {/* Full Screen Toggle */}
+                <button
+                  type="button"
+                  onClick={togglePreviewFullscreen}
+                  className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-blue-600/20 border border-blue-500/40 text-blue-300 hover:bg-blue-600 hover:text-white transition-all shadow-sm"
+                  title={isPreviewFullscreen ? 'Exit Full Screen' : 'Watch in Full Screen'}
+                >
+                  {isPreviewFullscreen ? (
+                    <>
+                      <Minimize className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">Exit Full Screen</span>
+                    </>
+                  ) : (
+                    <>
+                      <Maximize className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">Full Screen</span>
+                    </>
+                  )}
+                </button>
+
+                {/* Theater Mode Toggle */}
+                <button
+                  type="button"
+                  onClick={() => setIsPreviewTheaterMode((prev) => !prev)}
+                  className="hidden sm:flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-900 border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
+                  title={isPreviewTheaterMode ? 'Exit Theater Mode' : 'Theater Mode (Fill Window)'}
+                >
+                  {isPreviewTheaterMode ? <Shrink className="w-3.5 h-3.5" /> : <Expand className="w-3.5 h-3.5" />}
+                  <span>{isPreviewTheaterMode ? 'Standard' : 'Theater'}</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    if (document.fullscreenElement) {
+                      document.exitFullscreen().catch(() => {});
+                    }
+                    setIsPreviewTheaterMode(false);
+                    setPreviewVideoLesson(null);
+                  }}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                  title="Close preview (Esc)"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
-            <div className="aspect-video-container bg-black">
+            <div
+              className={`relative bg-black w-full flex items-center justify-center ${
+                isPreviewTheaterMode || isPreviewFullscreen
+                  ? 'flex-1 h-full min-h-0'
+                  : 'aspect-video-container'
+              }`}
+            >
               <iframe
                 src={getDrivePreviewUrl(previewVideoLesson.driveFileId)}
                 title={previewVideoLesson.title}
-                allow="autoplay; encrypted-media; fullscreen"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
                 allowFullScreen
-                className="w-full h-full"
+                className="w-full h-full border-0"
               />
             </div>
           </div>

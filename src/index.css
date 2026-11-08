@@ -40,3 +40,18 @@
   height: 100%;
   border: 0;
 }
+
+/* Fullscreen support */
+:fullscreen,
+:-webkit-full-screen {
+  background-color: #000000 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+}
+
+:fullscreen .aspect-video-container,
+:-webkit-full-screen .aspect-video-container {
+  padding-top: 0 !important;
+  height: 100% !important;
+  flex: 1 1 0% !important;
+}

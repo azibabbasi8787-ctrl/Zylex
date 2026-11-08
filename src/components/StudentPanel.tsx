@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Navbar } from './Navbar';
 import { CourseLesson } from '../types';
@@ -16,6 +16,10 @@ import {
   ExternalLink,
   BookOpen,
   Search,
+  Maximize,
+  Minimize,
+  Expand,
+  Shrink,
 } from 'lucide-react';
 
 export const StudentPanel: React.FC = () => {
@@ -24,6 +28,10 @@ export const StudentPanel: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [activeLesson, setActiveLesson] = useState<CourseLesson | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isTheaterMode, setIsTheaterMode] = useState(false);
+  const playerContainerRef = useRef<HTMLDivElement>(null);
+
   const [completedLessonIds, setCompletedLessonIds] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem(`zylex_completed_${currentUser?.uid}`);
@@ -95,17 +103,82 @@ export const StudentPanel: React.FC = () => {
     }
   };
 
-  // Keyboard navigation for video player modal
+  // Toggle true Fullscreen with fallback to windowed Theater Mode
+  const toggleFullscreen = async () => {
+    if (!playerContainerRef.current) return;
+
+    try {
+      if (!document.fullscreenElement) {
+        if (playerContainerRef.current.requestFullscreen) {
+          await playerContainerRef.current.requestFullscreen();
+        } else if ((playerContainerRef.current as any).webkitRequestFullscreen) {
+          await (playerContainerRef.current as any).webkitRequestFullscreen();
+        } else if ((playerContainerRef.current as any).mozRequestFullScreen) {
+          await (playerContainerRef.current as any).mozRequestFullScreen();
+        } else if ((playerContainerRef.current as any).msRequestFullscreen) {
+          await (playerContainerRef.current as any).msRequestFullscreen();
+        }
+      } else {
+        if (document.exitFullscreen) {
+          await document.exitFullscreen();
+        } else if ((document as any).webkitExitFullscreen) {
+          await (document as any).webkitExitFullscreen();
+        }
+      }
+    } catch (err) {
+      console.warn('Native fullscreen request blocked/unavailable, toggling theater mode instead:', err);
+      setIsTheaterMode((prev) => !prev);
+    }
+  };
+
+  // Listen to fullscreenchange events
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    document.addEventListener('mozfullscreenchange', handleFullscreenChange);
+    document.addEventListener('MSFullscreenChange', handleFullscreenChange);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('MSFullscreenChange', handleFullscreenChange);
+    };
+  }, []);
+
+  // Keyboard navigation & shortcuts for video player modal
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!activeLesson) return;
-      if (e.key === 'Escape') setActiveLesson(null);
+      if (e.key === 'Escape') {
+        if (document.fullscreenElement) {
+          document.exitFullscreen().catch(() => {});
+        } else if (isTheaterMode) {
+          setIsTheaterMode(false);
+        } else {
+          setActiveLesson(null);
+        }
+      }
+      if (e.key === 'f' || e.key === 'F') {
+        if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
+        e.preventDefault();
+        toggleFullscreen();
+      }
+      if (e.key === 't' || e.key === 'T') {
+        if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
+        e.preventDefault();
+        setIsTheaterMode((prev) => !prev);
+      }
       if (e.key === 'ArrowRight') handleNextLesson();
       if (e.key === 'ArrowLeft') handlePrevLesson();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeLesson, lessons]);
+  }, [activeLesson, lessons, isTheaterMode]);
 
   const filteredLessons = lessons.filter(
     (l) =>
@@ -300,10 +373,21 @@ export const StudentPanel: React.FC = () => {
 
       {/* VIDEO PLAYER MODAL / THEATER */}
       {activeLesson && (
-        <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 animate-fadeIn">
-          <div className="bg-[#0a0f1d] border border-slate-800 rounded-3xl w-full max-w-5xl max-h-[95vh] flex flex-col shadow-2xl overflow-hidden relative">
+        <div
+          className={`fixed inset-0 z-50 bg-black/95 backdrop-blur-md flex items-center justify-center animate-fadeIn ${
+            isTheaterMode || isFullscreen ? 'p-0' : 'p-3 sm:p-6'
+          }`}
+        >
+          <div
+            ref={playerContainerRef}
+            className={`bg-[#0a0f1d] flex flex-col shadow-2xl overflow-hidden relative transition-all duration-200 ${
+              isTheaterMode || isFullscreen
+                ? 'w-screen h-screen max-w-none max-h-none rounded-none border-0'
+                : 'border border-slate-800 rounded-3xl w-full max-w-5xl max-h-[95vh]'
+            }`}
+          >
             {/* Modal Header */}
-            <div className="px-5 sm:px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-[#0e162b]">
+            <div className="px-5 sm:px-6 py-3.5 border-b border-slate-800 flex items-center justify-between bg-[#0e162b] shrink-0">
               <div className="flex items-center space-x-3 overflow-hidden pr-4">
                 <span className="px-2.5 py-1 rounded bg-blue-600/20 border border-blue-500/30 text-blue-400 text-xs font-bold shrink-0">
                   Lesson {String(activeLesson.order).padStart(2, '0')}
@@ -314,6 +398,38 @@ export const StudentPanel: React.FC = () => {
               </div>
 
               <div className="flex items-center space-x-2 shrink-0">
+                {/* Full Screen Toggle Button */}
+                <button
+                  type="button"
+                  onClick={toggleFullscreen}
+                  className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-blue-600/20 border border-blue-500/40 text-blue-300 hover:bg-blue-600 hover:text-white transition-all shadow-sm"
+                  title={isFullscreen ? 'Exit Full Screen (F)' : 'Watch in Full Screen (F)'}
+                >
+                  {isFullscreen ? (
+                    <>
+                      <Minimize className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">Exit Full Screen</span>
+                    </>
+                  ) : (
+                    <>
+                      <Maximize className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">Full Screen</span>
+                    </>
+                  )}
+                </button>
+
+                {/* Theater Mode Button */}
+                <button
+                  type="button"
+                  onClick={() => setIsTheaterMode((prev) => !prev)}
+                  className="hidden sm:flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-900 border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
+                  title={isTheaterMode ? 'Exit Theater Mode (T)' : 'Theater Mode / Fill Window (T)'}
+                >
+                  {isTheaterMode ? <Shrink className="w-3.5 h-3.5" /> : <Expand className="w-3.5 h-3.5" />}
+                  <span>{isTheaterMode ? 'Standard' : 'Theater'}</span>
+                </button>
+
+                {/* Mark as Watched */}
                 <button
                   type="button"
                   onClick={() => toggleLessonCompleted(activeLesson.id)}
@@ -327,8 +443,15 @@ export const StudentPanel: React.FC = () => {
                   <span>{completedLessonIds.includes(activeLesson.id) ? 'Watched' : 'Mark as Watched'}</span>
                 </button>
 
+                {/* Close Button */}
                 <button
-                  onClick={() => setActiveLesson(null)}
+                  onClick={() => {
+                    if (document.fullscreenElement) {
+                      document.exitFullscreen().catch(() => {});
+                    }
+                    setIsTheaterMode(false);
+                    setActiveLesson(null);
+                  }}
                   className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
                   title="Close player (Esc)"
                 >
@@ -338,23 +461,34 @@ export const StudentPanel: React.FC = () => {
             </div>
 
             {/* Video Player (Google Drive Embedded Preview Link) */}
-            <div className="relative aspect-video-container bg-black w-full">
+            <div
+              className={`relative bg-black w-full flex items-center justify-center ${
+                isTheaterMode || isFullscreen
+                  ? 'flex-1 h-full min-h-0'
+                  : 'aspect-video-container'
+              }`}
+            >
               <iframe
                 src={getDrivePreviewUrl(activeLesson.driveFileId)}
                 title={activeLesson.title}
-                allow="autoplay; encrypted-media; fullscreen"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
                 allowFullScreen
                 className="w-full h-full border-0"
               />
             </div>
 
             {/* Modal Footer Controls */}
-            <div className="px-5 sm:px-6 py-4 bg-[#0a0f1d] border-t border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div className="text-xs text-slate-400 max-w-xl">
+            <div className="px-5 sm:px-6 py-3.5 bg-[#0a0f1d] border-t border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
+              <div className="text-xs text-slate-400 max-w-xl flex items-center space-x-3">
+                <span className="hidden md:inline-flex items-center space-x-1 text-[11px] text-slate-500 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
+                  <span>Tip: Press</span>
+                  <kbd className="font-mono text-blue-400 font-bold">F</kbd>
+                  <span>for Fullscreen</span>
+                </span>
                 {activeLesson.description ? (
-                  <p className="line-clamp-2">{activeLesson.description}</p>
+                  <p className="line-clamp-1 text-slate-300">{activeLesson.description}</p>
                 ) : (
-                  <p>Streaming directly from secure Google Drive link.</p>
+                  <p className="text-slate-500">Streaming directly from Google Drive</p>
                 )}
               </div>
 
@@ -363,7 +497,7 @@ export const StudentPanel: React.FC = () => {
                 <button
                   onClick={handlePrevLesson}
                   disabled={currentActiveIndex <= 0}
-                  className="flex items-center space-x-1 px-3.5 py-2 rounded-xl text-xs font-semibold bg-slate-900 border border-slate-800 text-slate-200 hover:bg-slate-800 disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                  className="flex items-center space-x-1 px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-slate-900 border border-slate-800 text-slate-200 hover:bg-slate-800 disabled:opacity-30 disabled:pointer-events-none transition-colors"
                 >
                   <ChevronLeft className="w-4 h-4" />
                   <span>Previous</span>
@@ -371,7 +505,7 @@ export const StudentPanel: React.FC = () => {
                 <button
                   onClick={handleNextLesson}
                   disabled={currentActiveIndex >= lessons.length - 1}
-                  className="flex items-center space-x-1 px-3.5 py-2 rounded-xl text-xs font-semibold bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-30 disabled:pointer-events-none transition-colors shadow-md shadow-blue-900/30"
+                  className="flex items-center space-x-1 px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-30 disabled:pointer-events-none transition-colors shadow-md shadow-blue-900/30"
                 >
                   <span>Next Lesson</span>
                   <ChevronRight className="w-4 h-4" />
